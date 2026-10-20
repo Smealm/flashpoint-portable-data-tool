@@ -2,7 +2,7 @@
   "name": "fpdt",
   "displayName": "Flashpoint Portable Data Tool",
   "author": "FPDT",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "launcherVersion": "12.2.0",
   "description": "Stores and restores Flashpoint's non-portable save data inside the Flashpoint folder, with per-account profiles, a shared system partition, and optional scoped Google Drive cloud sync.",
   "repository": {
@@ -18,7 +18,7 @@
     "build": "tsc -p tsconfig.json",
     "watch": "tsc -w -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test test/sync.test.js test/extension.test.js test/cloud.test.js",
+    "test": "npm run build && node --test test/sync.test.js test/extension.test.js test/cloud.test.js test/manifest-store.test.js",
     "fpdt": "node dist/cli.js"
   },
   "contributes": {
