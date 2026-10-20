@@ -180,6 +180,7 @@ export async function activate(context: flashpoint.ExtensionContext): Promise<vo
   if (runtimeConfig.syncOnStartup) {
     logger.info(`Restoring save data for profile "${engine.profile}" and system data...`);
     void (async () => {
+      await warmUpManifests();
       // Pull cloud changes into the archive first so the startup sync can
       // apply them to Windows. Uploads happen in the background afterwards.
       await pullCloudBeforeFullSync();
@@ -190,8 +191,78 @@ export async function activate(context: flashpoint.ExtensionContext): Promise<vo
     })().catch(error => {
       logger.error(`Startup sync failed: ${errorMessage(error)}`);
     });
-  } else if (runtimeConfig.cloudEnabled) {
-    scheduleCloudSync(5_000, true);
+  } else {
+    // Nothing to sync right now, but the manifests are still worth holding so
+    // the first launch and the first manager redraw do not pay for them.
+    void warmUpManifests();
+    if (runtimeConfig.cloudEnabled) {
+      scheduleCloudSync(5_000, true);
+    }
+  }
+}
+
+/**
+ * Read every manifest into memory once, with a progress dialog, before the
+ * startup sync. Each manifest is one step: the read cost is dominated by a
+ * single parse, so per-manifest progress is honest rather than decorative.
+ */
+async function warmUpManifests(): Promise<void> {
+  const activeEngine = engine;
+  if (!activeEngine) {
+    return;
+  }
+
+  const steps = [...activeEngine.warmSteps()];
+  if (cloud?.configured) {
+    steps.push(...cloud.warmSteps());
+  }
+
+  let dialogId: string | null = null;
+  try {
+    dialogId = await flashpoint.dialogs.showMessageBoxWithHandle({
+      message: 'FPDT: loading save data manifests into memory...',
+      userCanCancel: false,
+      buttons: ['Hide'],
+      fields: [{ type: 'progress', name: 'warmup', value: 0 }],
+    });
+  } catch (error) {
+    // Caching is an optimisation; a launcher without dialogs must still start.
+    logger.debug(`Warmup dialog unavailable: ${errorMessage(error)}`);
+  }
+
+  try {
+    let done = 0;
+    for (const step of steps) {
+      try {
+        const entries = await step.run();
+        logger.debug(`Pre-loaded ${step.label}: ${entries} entries`);
+      } catch (error) {
+        // A missing or unreadable manifest is normal on a first run.
+        logger.warn(`Could not pre-load ${step.label}: ${errorMessage(error)}`);
+      }
+      done++;
+      updateWarmupProgress(dialogId, Math.round((done / steps.length) * 100));
+    }
+  } finally {
+    if (dialogId) {
+      try {
+        flashpoint.dialogs.cancelDialog(dialogId);
+      } catch (error) {
+        logger.debug(`Could not close the warmup dialog: ${errorMessage(error)}`);
+      }
+    }
+  }
+}
+
+function updateWarmupProgress(dialogId: string | null, percent: number): void {
+  if (!dialogId) {
+    return;
+  }
+  try {
+    flashpoint.dialogs.updateDialogField(dialogId, 'warmup', percent);
+  } catch (error) {
+    // The user may have closed the dialog while the warmup was still running.
+    logger.debug(`Warmup progress update failed: ${errorMessage(error)}`);
   }
 }
 

@@ -52,13 +52,16 @@ function normalizeManifest(raw: unknown, profile: string, logger: Logger): Manif
     // A manifest for a different profile would compare unrelated files.
     return null;
   }
-  const files: ManifestData['files'] = {};
+  // Validate the parsed table in place instead of rebuilding it. Copying every
+  // entry allocated a second object per file, which was the second largest cost
+  // of a load; the table is not aliased anywhere else, so mutating it is safe.
+  let files: ManifestData['files'] = {};
   if (value.files && typeof value.files === 'object') {
-    for (const [key, entry] of Object.entries(value.files)) {
-      if (isFileEntry(entry)) {
-        files[key] = entry;
-      } else {
+    files = value.files as ManifestData['files'];
+    for (const key in files) {
+      if (!isFileEntry(files[key])) {
         logger.debug(`Dropping invalid manifest entry for ${key}`);
+        delete files[key];
       }
     }
   }
@@ -81,12 +84,35 @@ export async function saveManifest(
   profile: string,
   entries: Map<string, FileEntryView>,
 ): Promise<void> {
+  const base = new Map<string, FileEntry>();
+  const keys = new Map<string, string>();
+  for (const [lower, view] of entries) {
+    base.set(lower, view.entry);
+    keys.set(lower, view.key);
+  }
+  await saveManifestState(filePath, profile, base, keys);
+}
+
+/**
+ * Write a manifest from the case-insensitive index maps the engine keeps. Kept
+ * separate from `saveManifest` so callers that already hold the two maps do not
+ * have to build a third copy of every entry first.
+ *
+ * Returns the written data so a caller can cache it without re-reading.
+ */
+export async function saveManifestState(
+  filePath: string,
+  profile: string,
+  entries: Map<string, FileEntry>,
+  keys: Map<string, string>,
+): Promise<ManifestData> {
   const files: ManifestData['files'] = {};
-  const keys = [...entries.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const lower of keys) {
-    const view = entries.get(lower);
-    if (view) {
-      files[view.key] = view.entry;
+  const sorted = [...keys.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const lower of sorted) {
+    const key = keys.get(lower);
+    const entry = entries.get(lower);
+    if (key && entry) {
+      files[key] = entry;
     }
   }
   const data: ManifestData = {
@@ -96,6 +122,7 @@ export async function saveManifest(
     files,
   };
   await writeJsonAtomic(filePath, data);
+  return data;
 }
 
 export function manifestPath(profileDir: string): string {

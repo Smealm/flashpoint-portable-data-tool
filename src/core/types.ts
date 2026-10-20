@@ -34,6 +34,14 @@ export interface ManifestData {
   files: Record<string, FileEntry>;
 }
 
+/** One manifest the extension can pre-load into memory during startup. */
+export interface WarmupStep {
+  /** Short label shown in the warmup progress dialog. */
+  label: string;
+  /** Load the manifest and return how many entries it now holds. */
+  run(): Promise<number>;
+}
+
 export interface Logger {
   debug(message: string): void;
   info(message: string): void;

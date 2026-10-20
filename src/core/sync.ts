@@ -16,6 +16,7 @@ import {
   SyncMode,
   SyncResult,
   SyncStatus,
+  WarmupStep,
 } from './types';
 import {
   archivePathForKey,
@@ -25,8 +26,9 @@ import {
   sanitizeProfileName,
   SAVE_TARGETS,
 } from './targets';
-import { FileIndex, indexManifestFiles, isIgnoredName, scanPath, scanSaveData } from './scan';
-import { FileEntryView, loadManifest, manifestPath, saveManifest } from './manifest';
+import { FileIndex, isIgnoredName, scanPath, scanSaveData } from './scan';
+import { manifestPath } from './manifest';
+import { ManifestStore } from './manifest-store';
 import {
   copyDirRecursive,
   copyFilePreserve,
@@ -95,6 +97,7 @@ export class SyncEngine {
   private readonly targets = SAVE_TARGETS;
   private safetyBackups: boolean;
   private conflictPolicy: ConflictPolicy;
+  private readonly store: ManifestStore;
 
   private _profile: string;
   private queue: Promise<unknown> = Promise.resolve();
@@ -110,6 +113,9 @@ export class SyncEngine {
     this.safetyBackups = options.safetyBackups;
     this.conflictPolicy = options.conflictPolicy;
     this._profile = sanitizeProfileName(options.profile);
+    // One resident manifest set per engine: sync, status and cloud sync all hit
+    // the same files repeatedly, so they share this instead of re-reading them.
+    this.store = new ManifestStore(options.logger);
     if (options.targets) {
       this.targets = options.targets;
     }
@@ -230,12 +236,63 @@ export class SyncEngine {
 
   private run<T>(task: () => Promise<T>): Promise<T> {
     // All operations share one queue: a backup must never scan a half-applied sync.
-    const next = this.queue.then(task, task);
+    const guarded = async (): Promise<T> => {
+      try {
+        const value = await task();
+        this.store.settle();
+        return value;
+      } catch (error) {
+        // The resident indexes may have been mutated before the failure. Drop
+        // them so the next operation starts from what is actually on disk.
+        this.store.invalidateAll();
+        throw error;
+      }
+    };
+    const next = this.queue.then(guarded, guarded);
     this.queue = next.then(
       () => undefined,
       () => undefined,
     );
     return next;
+  }
+
+  /**
+   * Manifests this engine can pre-load at startup. Loading them here means the
+   * first sync and the first manager redraw find everything already parsed.
+   */
+  warmSteps(): WarmupStep[] {
+    const profile = this.partition('profile');
+    const system = this.partition('system');
+    const load = (filePath: string, id: string) => async (): Promise<number> =>
+      (await this.store.load(filePath, id)).index.entries.size;
+    return [
+      {
+        label: `profile data (${profile.id})`,
+        run: load(manifestPath(profile.archiveDir), profile.id),
+      },
+      {
+        label: `profile local state (${profile.id})`,
+        run: load(profile.localManifestPath, profile.id),
+      },
+      {
+        label: 'system data',
+        run: load(manifestPath(system.archiveDir), system.id),
+      },
+      {
+        label: 'system local state',
+        run: load(system.localManifestPath, system.id),
+      },
+    ];
+  }
+
+  /** Resident manifest counts, for diagnostics and tests. */
+  get manifestCacheStats(): { manifests: number; entries: number } {
+    return { manifests: this.store.residentManifests, entries: this.store.residentEntries };
+  }
+
+  /** Manifest writes that were skipped because nothing had changed. */
+  get skippedManifestWrites(): number {
+    return this.store.skippedWrites;
   }
 
   private localManifestPath(profile: string): string {
@@ -274,8 +331,8 @@ export class SyncEngine {
     const profile = partition.id;
     const profileDir = partition.archiveDir;
 
-    const remoteLoaded = await loadManifest(manifestPath(profileDir), profile, this.logger);
-    const localLoaded = await loadManifest(partition.localManifestPath, profile, this.logger);
+    const remoteLoaded = await this.store.load(manifestPath(profileDir), profile);
+    const localLoaded = await this.store.load(partition.localManifestPath, profile);
     const firstSync = localLoaded.data === null;
     result.firstSync = firstSync;
 
@@ -284,8 +341,8 @@ export class SyncEngine {
       return result;
     }
 
-    const remoteIndex = indexManifestFiles(remoteLoaded.data?.files);
-    const localIndex = indexManifestFiles(localLoaded.data?.files);
+    const remoteIndex = remoteLoaded.index;
+    const localIndex = localLoaded.index;
     const specialSync = firstSync || options.forceRemote === true;
 
     const [localFiles, remoteFiles] = await Promise.all([
@@ -352,8 +409,8 @@ export class SyncEngine {
 
     if (mode === 'full' || result.firstSync || hasChanges(result)) {
       await ensureDir(profileDir);
-      await saveManifest(manifestPath(profileDir), profile, viewsOf(remote.base, remote.keys));
-      await saveManifest(partition.localManifestPath, profile, viewsOf(local.base, local.keys));
+      await this.store.save(manifestPath(profileDir), profile, remote.base, remote.keys);
+      await this.store.save(partition.localManifestPath, profile, local.base, local.keys);
     }
 
     const summary = `Sync (${mode}) for ${partition.label}: ${result.uploaded} uploaded, ${result.downloaded} downloaded, ` +
@@ -380,8 +437,8 @@ export class SyncEngine {
     const partition = this.partition(kind);
     const profile = partition.id;
     const profileDir = partition.archiveDir;
-    const remoteLoaded = await loadManifest(manifestPath(profileDir), profile, this.logger);
-    const localLoaded = await loadManifest(partition.localManifestPath, profile, this.logger);
+    const remoteLoaded = await this.store.load(manifestPath(profileDir), profile);
+    const localLoaded = await this.store.load(partition.localManifestPath, profile);
 
     // A first sync needs the full archive-wins pass. The watcher normally
     // starts after that, but activation and startup sync can overlap.
@@ -389,8 +446,8 @@ export class SyncEngine {
       return this.syncNow(partition, mode);
     }
 
-    const remoteIndex = indexManifestFiles(remoteLoaded.data?.files);
-    const localIndex = indexManifestFiles(localLoaded.data?.files);
+    const remoteIndex = remoteLoaded.index;
+    const localIndex = localLoaded.index;
     const localFiles: FileIndex = new Map();
     const remoteFiles: FileIndex = new Map();
     const localScans = new Map<string, string>();
@@ -454,8 +511,8 @@ export class SyncEngine {
 
     if (mode === 'full' || hasChanges(result)) {
       await ensureDir(profileDir);
-      await saveManifest(manifestPath(profileDir), profile, viewsOf(remote.base, remote.keys));
-      await saveManifest(partition.localManifestPath, profile, viewsOf(local.base, local.keys));
+      await this.store.save(manifestPath(profileDir), profile, remote.base, remote.keys);
+      await this.store.save(partition.localManifestPath, profile, local.base, local.keys);
     }
 
     const summary = `Sync (${mode}, incremental) for ${partition.label}: ${result.uploaded} uploaded, ` +
@@ -748,11 +805,11 @@ export class SyncEngine {
     const profile = partition.id;
     const profileDir = partition.archiveDir;
     const [remoteLoaded, localLoaded] = await Promise.all([
-      loadManifest(manifestPath(profileDir), profile, this.logger),
-      loadManifest(partition.localManifestPath, profile, this.logger),
+      this.store.load(manifestPath(profileDir), profile),
+      this.store.load(partition.localManifestPath, profile),
     ]);
-    const remoteIndex = indexManifestFiles(remoteLoaded.data?.files);
-    const localIndex = indexManifestFiles(localLoaded.data?.files);
+    const remoteIndex = remoteLoaded.index;
+    const localIndex = localLoaded.index;
 
     let localFileCount = localIndex.entries.size;
     let localBytes = sumEntries(localIndex.entries);
@@ -811,16 +868,15 @@ export class SyncEngine {
   /** Read one profile's archive manifest, without touching other profiles. */
   async profileSummary(name: string): Promise<ProfileSummary> {
     const profile = sanitizeProfileName(name);
-    const loaded = await loadManifest(manifestPath(path.join(this.archiveRoot, profile)), profile, this.logger);
+    const loaded = await this.store.load(manifestPath(path.join(this.archiveRoot, profile)), profile);
     let bytes = 0;
-    const files = Object.values(loaded.data?.files ?? {});
-    for (const entry of files) {
+    for (const entry of loaded.index.entries.values()) {
       bytes += entry.size;
     }
     return {
       name: profile,
       active: profile.toLowerCase() === this._profile.toLowerCase(),
-      fileCount: files.length,
+      fileCount: loaded.index.entries.size,
       bytes,
       lastSync: loaded.data?.updatedAt || null,
     };
@@ -829,11 +885,11 @@ export class SyncEngine {
   /** Live and archived sizes for one partition (currently used for system data). */
   private async partitionStatus(partition: Partition, scan: boolean): Promise<PartitionStatus> {
     const [archiveLoaded, localLoaded] = await Promise.all([
-      loadManifest(manifestPath(partition.archiveDir), partition.id, this.logger),
-      loadManifest(partition.localManifestPath, partition.id, this.logger),
+      this.store.load(manifestPath(partition.archiveDir), partition.id),
+      this.store.load(partition.localManifestPath, partition.id),
     ]);
-    const archiveIndex = indexManifestFiles(archiveLoaded.data?.files);
-    const localIndex = indexManifestFiles(localLoaded.data?.files);
+    const archiveIndex = archiveLoaded.index;
+    const localIndex = localLoaded.index;
 
     let localFileCount = localIndex.entries.size;
     let localBytes = sumEntries(localIndex.entries);
@@ -911,6 +967,9 @@ export class SyncEngine {
         data.profile = targetName;
         data.updatedAt = new Date().toISOString();
         await writeJsonAtomic(targetManifest, data);
+        // The copy was rewritten outside the store, so any resident copy of it
+        // is now older than the file on disk.
+        this.store.invalidate(targetManifest);
       } catch (error) {
         if (!isErrno(error, 'ENOENT') && !(error instanceof SyntaxError)) {
           throw error;
@@ -930,9 +989,9 @@ export class SyncEngine {
       let deletedLocalFiles = 0;
 
       if (options.deleteLocalData) {
-        const loaded = await loadManifest(localManifest, name, this.logger);
+        const loaded = await this.store.load(localManifest, name);
         const profileRoots = new Set(this.partition('profile').targets.map(target => target.root));
-        for (const key of Object.keys(loaded.data?.files ?? {})) {
+        for (const key of loaded.index.keys.values()) {
           try {
             const { root } = splitKeySafe(key);
             // A legacy manifest may still list PD files. Profile deletion must
@@ -955,6 +1014,8 @@ export class SyncEngine {
       const deletedArchiveFiles = await countFiles(profileDir);
       await removeDir(profileDir);
       await removeIfExists(localManifest);
+      this.store.invalidate(manifestPath(profileDir));
+      this.store.invalidate(localManifest);
       this.logger.info(`Deleted profile "${name}" (${deletedArchiveFiles} archived files, ${deletedLocalFiles} local files).`);
 
       return { profile: name, deletedArchiveFiles, deletedLocalFiles };
@@ -967,8 +1028,8 @@ export class SyncEngine {
       let deletedLocalFiles = 0;
 
       if (options.deleteLocalData) {
-        const loaded = await loadManifest(partition.localManifestPath, partition.id, this.logger);
-        for (const key of Object.keys(loaded.data?.files ?? {})) {
+        const loaded = await this.store.load(partition.localManifestPath, partition.id);
+        for (const key of loaded.index.keys.values()) {
           try {
             const filePath = localPathForKey(this.roots, key);
             if (await statOrNull(filePath)) {
@@ -986,6 +1047,8 @@ export class SyncEngine {
       const deletedArchiveFiles = await countFiles(partition.archiveDir);
       await removeDir(partition.archiveDir);
       await removeIfExists(partition.localManifestPath);
+      this.store.invalidate(manifestPath(partition.archiveDir));
+      this.store.invalidate(partition.localManifestPath);
       this.logger.info(
         `Deleted system data partition (${deletedArchiveFiles} archived files, ${deletedLocalFiles} local files).`,
       );
@@ -1124,14 +1187,6 @@ function drop(lower: string, local: Side, remote: Side): void {
   local.keys.delete(lower);
   remote.base.delete(lower);
   remote.keys.delete(lower);
-}
-
-function viewsOf(entries: Map<string, FileEntry>, keys: Map<string, string>): Map<string, FileEntryView> {
-  const views = new Map<string, FileEntryView>();
-  for (const [lower, entry] of entries) {
-    views.set(lower, { key: keys.get(lower) ?? lower, entry });
-  }
-  return views;
 }
 
 function conflictStamp(): string {

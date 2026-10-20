@@ -12,9 +12,9 @@ import {
   removeIfExists,
   statOrNull,
 } from './io';
-import { FileEntryView, loadManifest, saveManifest } from './manifest';
+import { ManifestBundle, ManifestStore } from './manifest-store';
 import { FileIndex, indexManifestFiles, scanPath } from './scan';
-import { FileEntry, Logger } from './types';
+import { FileEntry, Logger, WarmupStep } from './types';
 
 /**
  * Flashpoint-relative path plus the same path under a nested `Flashpoint/`
@@ -201,6 +201,7 @@ export class CloudEngine {
   private readonly scopeGroups: readonly (readonly string[])[];
   private transport: CloudTransport | null;
   private safetyBackups: boolean;
+  private readonly store: ManifestStore;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(options: CloudSyncOptions) {
@@ -211,6 +212,9 @@ export class CloudEngine {
     this.transport = options.transport;
     this.safetyBackups = options.safetyBackups;
     this.scopeGroups = options.scope ?? CLOUD_SCOPE;
+    // The cloud manifest is read by status() on every manager redraw, so it is
+    // kept resident rather than re-parsed each time.
+    this.store = new ManifestStore(options.logger);
   }
 
   get configured(): boolean {
@@ -234,19 +238,32 @@ export class CloudEngine {
     return resolved;
   }
 
+  /** The cloud manifest can be pre-loaded at startup like the sync manifests. */
+  warmSteps(): WarmupStep[] {
+    return [
+      {
+        label: 'cloud manifest',
+        run: async () =>
+          (await this.store.load(this.manifestPath, CLOUD_PROFILE)).index.entries.size,
+      },
+    ];
+  }
+
   async status(): Promise<CloudStatus> {
-    let loaded: Awaited<ReturnType<typeof loadManifest>> = { data: null, corrupt: false };
+    let loaded: ManifestBundle | null = null;
     let error: string | null = null;
     try {
-      loaded = await loadManifest(this.manifestPath, CLOUD_PROFILE, this.logger);
+      loaded = await this.store.load(this.manifestPath, CLOUD_PROFILE);
     } catch (caught) {
       error = `Could not read ${this.manifestPath}: ${errorMessage(caught)}`;
     }
     let flashpointFileCount = 0;
     let flashpointBytes = 0;
-    for (const entry of Object.values(loaded.data?.files ?? {})) {
-      flashpointFileCount++;
-      flashpointBytes += entry.size;
+    if (loaded) {
+      flashpointFileCount = loaded.index.entries.size;
+      for (const entry of loaded.index.entries.values()) {
+        flashpointBytes += entry.size;
+      }
     }
 
     let connected = false;
@@ -277,7 +294,7 @@ export class CloudEngine {
       scope: this.resolveScope(),
       flashpointFileCount,
       flashpointBytes,
-      lastSync: loaded.data?.updatedAt || null,
+      lastSync: loaded?.data?.updatedAt || null,
       cloudFileCount,
       cloudBytes,
       cloudUpdatedAt,
@@ -296,10 +313,17 @@ export class CloudEngine {
    */
   sync(request: CloudSyncRequest = {}): Promise<CloudSyncResult> {
     const direction = request.direction ?? 'both';
-    const next = this.queue.then(
-      () => this.syncNow(direction),
-      () => this.syncNow(direction),
-    );
+    const run = async (): Promise<CloudSyncResult> => {
+      try {
+        const result = await this.syncNow(direction);
+        this.store.settle();
+        return result;
+      } catch (error) {
+        this.store.invalidateAll();
+        throw error;
+      }
+    };
+    const next = this.queue.then(run, run);
     this.queue = next.then(
       () => undefined,
       () => undefined,
@@ -315,11 +339,11 @@ export class CloudEngine {
     }
 
     const result = emptyResult();
-    const flashpointLoaded = await loadManifest(this.manifestPath, CLOUD_PROFILE, this.logger);
+    const flashpointLoaded = await this.store.load(this.manifestPath, CLOUD_PROFILE);
     const cloudManifest = normalizeCloudManifest(await transport.readManifest());
     result.firstSync = flashpointLoaded.data === null || cloudManifest === null;
 
-    const flashpointIndex = indexManifestFiles(flashpointLoaded.data?.files);
+    const flashpointIndex = flashpointLoaded.index;
     const cloudIndex = indexManifestFiles(cloudManifest?.files);
     const scope = this.resolveScope();
 
@@ -428,7 +452,7 @@ export class CloudEngine {
 
     if (hasChanges(result) || result.firstSync) {
       await ensureDir(path.dirname(this.manifestPath));
-      await saveManifest(this.manifestPath, CLOUD_PROFILE, viewsOf(local.base, local.keys));
+      await this.store.save(this.manifestPath, CLOUD_PROFILE, local.base, local.keys);
     }
     if (
       !pullOnly &&
@@ -932,14 +956,6 @@ function buildCloudManifest(
     updatedAt: new Date().toISOString(),
     files,
   };
-}
-
-function viewsOf(entries: Map<string, FileEntry>, keys: Map<string, string>): Map<string, FileEntryView> {
-  const views = new Map<string, FileEntryView>();
-  for (const [lower, entry] of entries) {
-    views.set(lower, { key: keys.get(lower) ?? lower, entry });
-  }
-  return views;
 }
 
 function converge(lower: string, l: SideFile, c: SideFile, local: Side, cloud: Side): void {

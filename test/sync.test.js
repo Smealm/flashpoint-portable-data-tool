@@ -588,3 +588,32 @@ test('status uses tracked manifests unless an on-disk scan is requested', async 
   const scanned = await engine.status({ scan: true });
   assert.equal(scanned.localFileCount, 2);
 });
+
+test('a failed operation leaves no resident manifest behind', async () => {
+  const box = await sandbox();
+  await writeLocal(box, FLASH, 'v1');
+  const engine = makeEngine(box);
+  await engine.syncAll('full');
+
+  assert.ok(engine.manifestCacheStats.manifests > 0, 'the successful sync populated the cache');
+  assert.ok(engine.manifestCacheStats.entries > 0);
+
+  // Replace both archive manifests with directories. Reading a directory is an
+  // IO error rather than a missing file, so both partitions reject at their very
+  // first load and neither can repopulate the cache after it is dropped.
+  for (const manifestFile of [
+    path.join(box.archive, 'Admin', 'manifest.json'),
+    path.join(box.system, 'manifest.json'),
+  ]) {
+    await fs.rm(nativePath(manifestFile), { recursive: true, force: true });
+    await fs.mkdir(nativePath(manifestFile), { recursive: true });
+  }
+
+  await assert.rejects(() => engine.syncAll('full'));
+
+  assert.deepEqual(
+    engine.manifestCacheStats,
+    { manifests: 0, entries: 0 },
+    'partially applied state must not survive a failed operation',
+  );
+});

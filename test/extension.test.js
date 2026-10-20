@@ -77,6 +77,8 @@ process.env.USERNAME = 'TestUser';
 
 const logs = [];
 const commands = new Map();
+const progressUpdates = [];
+const closedDialogs = [];
 const hooks = {
   onWillLaunchGame: makeEvent(),
   onWillLaunchAddApp: makeEvent(),
@@ -115,7 +117,17 @@ const fakeFlashpoint = {
       return 99;
     },
     async showMessageBoxWithHandle() {
+      // Reset so the warmup assertions below cannot pass on a stale entry from
+      // an earlier test in this file.
+      progressUpdates.length = 0;
+      closedDialogs.length = 0;
       return 'handle';
+    },
+    updateDialogField(dialogId, name, value) {
+      progressUpdates.push([dialogId, name, value]);
+    },
+    cancelDialog(dialogId) {
+      closedDialogs.push(dialogId);
     },
     async awaitDialog() {
       return { buttonId: 1, buttonIdx: 1, dialog: { id: 'handle', message: '', buttons: [], fields: [] } };
@@ -152,6 +164,19 @@ test('activate registers hooks and syncs through the mocked launcher API', { ski
   assert.ok(commands.has('fpdt.openManager'), 'manager command is registered');
   assert.equal(hooks.onWillLaunchGame.listeners.length, 1);
   assert.equal(hooks.onWillLaunchAddApp.listeners.length, 1);
+
+  assert.ok(
+    await waitFor(() => closedDialogs.length > 0),
+    'the warmup dialog is closed once the manifests are pre-loaded',
+  );
+  assert.ok(
+    progressUpdates.length >= 4,
+    `expected one warmup progress update per manifest, got ${progressUpdates.length}`,
+  );
+  assert.ok(
+    progressUpdates.every(([, name]) => name === 'warmup'),
+    'warmup progress is reported on the warmup field',
+  );
 
   const archiveFile = path.join(
     extensionRoot,
