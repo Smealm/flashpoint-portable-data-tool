@@ -111,8 +111,36 @@ see or change the rest of your Drive.
 - `Data/Themes` (can be large; the first upload takes longer)
 - Flashpoint Navigator's `webappsstore.sqlite`
 - Portable Shockwave preferences for PJ851 and PJ9
+- The `Legacy` folders of games that saved to their original online servers rather than to a normal save folder
 
-Nothing else is uploaded or restored.
+These are the exact paths, relative to your Flashpoint folder:
+
+```
+Data/Playlists/
+Data/Themes/
+Data/Extensions/FPDT/profiles/
+Data/Extensions/FPDT/.global/
+FPSoftware/fpnavigator-portable/User/flashpointnavigator/Profiles/Default/webappsstore.sqlite
+FPSoftware/Shockwave/PJ851/Prefs/
+FPSoftware/Shockwave/PJ9/Prefs/
+Legacy/cgi-bin/www.xgenstudios.com/motherload/savedata/
+Legacy/cgi-bin/api.xgenstudios.com/stickrpg2/
+Legacy/cgi-bin/www.elementsthegame.com/saves/
+Legacy/htdocs/www.pom-baer.at/spiele/weltenbauer/welten/
+Legacy/htdocs/httpsmynk.ninjakiwi.com/database/userdata/
+Legacy/htdocs/awesomehouseparty.com/house/bfahp.sqlite
+Legacy/htdocs/www.dinodan.com/DinoDan.db
+Legacy/htdocs/api.tetrisfriends.com/_backend/users/
+Legacy/htdocs/www.sensoryworld.org/amf/users.json
+Legacy/htdocs/pbskids.org/designsquad/games/fidgit/php/fidgit.db
+```
+
+That covers MotherLoad, Stick RPG 2, Elements, POM-BÄR Weltenbauer, Bloons Super Monkey 2, Big Fat Awesome
+House Party, Dino Dan, Tetris Friends Battle 2P, Sensory World, and DESIGNit BUILDit FIDGit. The `Legacy` saves are
+listed on [Flashpoint's save data page](https://flashpointarchive.org/datahub/Save_Data_Locations).
+
+If your collection nests the portable files inside a `Flashpoint` subfolder, the same paths are found there
+instead. Nothing else is uploaded or restored.
 
 ### How it behaves
 

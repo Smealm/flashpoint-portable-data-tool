@@ -19,6 +19,9 @@ const SYSTEM_SAVE = 'Data/Extensions/FPDT/.global/PD/Adobe/Director 12/SPR/Prefs
 const NAVIGATOR = 'FPSoftware/fpnavigator-portable/User/flashpointnavigator/Profiles/Default/webappsstore.sqlite';
 const P851 = 'FPSoftware/Shockwave/PJ851/Prefs/prefs.txt';
 const P9 = 'FPSoftware/Shockwave/PJ9/Prefs/prefs.txt';
+const MOTHERLOAD = 'Legacy/cgi-bin/www.xgenstudios.com/motherload/savedata/save.xml';
+const STICKRPG2 = 'Legacy/cgi-bin/api.xgenstudios.com/stickrpg2/users.txt';
+const FIDGIT = 'Legacy/htdocs/pbskids.org/designsquad/games/fidgit/php/fidgit.db';
 
 const sandboxes = [];
 after(async () => {
@@ -564,6 +567,33 @@ test('pull mode brings cloud changes down without uploading local work', async (
   assert.equal(full.uploaded, 2);
   assert.equal(drive.content(PLAYLIST), 'local-v2');
   assert.equal(drive.content('Data/Playlists/new-local.json'), 'new-local');
+});
+
+test('game-specific Legacy save folders are backed up and restored', async () => {
+  const box = await sandbox();
+  const drive = new FakeDrive();
+  await write(box, MOTHERLOAD, 'motherload-save');
+  await write(box, STICKRPG2, 'stickrpg2-save');
+  await write(box, FIDGIT, 'fidgit-db');
+
+  const cloud = makeCloud(box, drive);
+  const first = await cloud.sync();
+  assert.equal(first.errors, 0);
+  assert.equal(first.uploaded, 3);
+  assert.deepEqual(drive.keys(), [MOTHERLOAD, STICKRPG2, FIDGIT].sort());
+
+  const status = await cloud.status();
+  assert.ok(status.scope.includes('Legacy/cgi-bin/www.xgenstudios.com/motherload/savedata'));
+  assert.ok(status.scope.includes('Legacy/htdocs/pbskids.org/designsquad/games/fidgit/php/fidgit.db'));
+
+  // A fresh machine restores them from cloud on the first pass.
+  const other = await sandbox();
+  const restored = await makeCloud(other, drive).sync();
+  assert.equal(restored.errors, 0);
+  assert.equal(restored.downloaded, 3);
+  assert.equal(await read(other, MOTHERLOAD), 'motherload-save');
+  assert.equal(await read(other, STICKRPG2), 'stickrpg2-save');
+  assert.equal(await read(other, FIDGIT), 'fidgit-db');
 });
 
 test('cloud files outside the resolved scope are never restored', async () => {

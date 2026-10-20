@@ -17,6 +17,34 @@ import { FileIndex, indexManifestFiles, scanPath } from './scan';
 import { FileEntry, Logger } from './types';
 
 /**
+ * Flashpoint-relative path plus the same path under a nested `Flashpoint/`
+ * folder. Newer collections put everything at the root; older ones nest the
+ * portable folder. The first existing candidate wins, so both are covered.
+ */
+function portablePath(relative: string): readonly string[] {
+  return [relative, `Flashpoint/${relative}`];
+}
+
+/**
+ * Game-specific saves that Flashpoint writes inside its own `Legacy/` folder
+ * instead of the Windows user folders, so they are not part of the normal
+ * save-data targets. Taken from the Game specific locations table at
+ * https://flashpointarchive.org/datahub/Save_Data_Locations
+ */
+const LEGACY_SAVE_PATHS: readonly string[] = [
+  'Legacy/cgi-bin/www.xgenstudios.com/motherload/savedata',
+  'Legacy/cgi-bin/api.xgenstudios.com/stickrpg2',
+  'Legacy/cgi-bin/www.elementsthegame.com/saves',
+  'Legacy/htdocs/www.pom-baer.at/spiele/weltenbauer/welten',
+  'Legacy/htdocs/httpsmynk.ninjakiwi.com/database/userdata',
+  'Legacy/htdocs/awesomehouseparty.com/house/bfahp.sqlite',
+  'Legacy/htdocs/www.dinodan.com/DinoDan.db',
+  'Legacy/htdocs/api.tetrisfriends.com/_backend/users',
+  'Legacy/htdocs/www.sensoryworld.org/amf/users.json',
+  'Legacy/htdocs/pbskids.org/designsquad/games/fidgit/php/fidgit.db',
+];
+
+/**
  * Cloud sync is deliberately scoped to a fixed set of paths inside the
  * Flashpoint folder. Keys are forward-slash paths relative to that folder, for
  * both the local tree and the Google Drive app data folder. Nothing outside
@@ -27,12 +55,10 @@ export const CLOUD_SCOPE: readonly (readonly string[])[] = [
   ['Data/Themes'],
   ['Data/Extensions/FPDT/profiles'],
   ['Data/Extensions/FPDT/.global'],
-  ['FPSoftware/fpnavigator-portable/User/flashpointnavigator/Profiles/Default/webappsstore.sqlite'],
-  // The portable Shockwave prefs folder is normally at the Flashpoint root.
-  // Older layouts nest the whole portable folder under a "Flashpoint" folder,
-  // so the first existing candidate wins.
-  ['FPSoftware/Shockwave/PJ851/Prefs', 'Flashpoint/FPSoftware/Shockwave/PJ851/Prefs'],
-  ['FPSoftware/Shockwave/PJ9/Prefs', 'Flashpoint/FPSoftware/Shockwave/PJ9/Prefs'],
+  portablePath('FPSoftware/fpnavigator-portable/User/flashpointnavigator/Profiles/Default/webappsstore.sqlite'),
+  portablePath('FPSoftware/Shockwave/PJ851/Prefs'),
+  portablePath('FPSoftware/Shockwave/PJ9/Prefs'),
+  ...LEGACY_SAVE_PATHS.map(portablePath),
 ];
 
 /** Name used inside the Drive app data folder. */
