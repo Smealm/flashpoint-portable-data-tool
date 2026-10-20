@@ -16,8 +16,8 @@ settings and behaviour are unchanged, so existing installs need no migration.
   read is validated against the file's size and modification time, so edits made
   by another process (the CLI, a second launcher) are still picked up, and
   concurrent loads of the same manifest share one read.
-- Save data manager redraws and `status` calls no longer touch the disk once a
-  manifest is resident.
+- Save data manager redraws and `status` calls no longer re-read or re-parse a
+  manifest once it is resident; only its size and modification time are checked.
 - An unchanged sync no longer rewrites the manifest files. Previously a full
   sync that found nothing to do still rewrote every manifest it had loaded.
 - Manifests are loaded once at launcher startup, before the startup sync, behind
