@@ -1,0 +1,118 @@
+{
+  "name": "fpdt",
+  "displayName": "Flashpoint Portable Data Tool",
+  "author": "FPDT",
+  "version": "0.1.0",
+  "launcherVersion": "12.2.0",
+  "description": "Stores and restores Flashpoint's non-portable save data inside the Flashpoint folder, with per-account profiles, a shared system partition, and optional scoped Google Drive cloud sync.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Smealm/flashpoint-portable-data-tool.git"
+  },
+  "homepage": "https://github.com/Smealm/flashpoint-portable-data-tool#readme",
+  "bugs": {
+    "url": "https://github.com/Smealm/flashpoint-portable-data-tool/issues"
+  },
+  "main": "./dist/extension.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -w -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/sync.test.js test/extension.test.js test/cloud.test.js",
+    "fpdt": "node dist/cli.js"
+  },
+  "contributes": {
+    "configuration": [
+      {
+        "title": "FPDT - Portable Save Data",
+        "properties": {
+          "fpdt.openManager": {
+            "title": "Save Data Manager",
+            "type": "button",
+            "command": "fpdt.openManager",
+            "description": "Sync now, copy a profile, deploy a profile to this machine, or delete a profile."
+          },
+          "fpdt.profile": {
+            "title": "Active Profile",
+            "type": "string",
+            "default": "",
+            "description": "Profile name to sync with. Empty uses the current Windows account name."
+          },
+          "fpdt.syncOnStartup": {
+            "title": "Restore On Launcher Startup",
+            "type": "boolean",
+            "default": true,
+            "description": "Run a full two-way sync as soon as the launcher starts."
+          },
+          "fpdt.restoreBeforeLaunch": {
+            "title": "Restore Before Game Launch",
+            "type": "boolean",
+            "default": true,
+            "description": "Sync save data before a game or add app is launched, so restored data is in place before it is used."
+          },
+          "fpdt.backupOnFileChange": {
+            "title": "Backup While Playing",
+            "type": "boolean",
+            "default": true,
+            "description": "Watch the save data folders and back up changes shortly after they are written (this is how backups are captured when a game closes)."
+          },
+          "fpdt.backupIntervalMinutes": {
+            "title": "Backup Interval (minutes)",
+            "type": "string",
+            "enum": ["0", "1", "2", "5", "10", "30", "60"],
+            "default": "5",
+            "description": "Safety backup of local changes at this interval. Set to 0 to disable."
+          },
+          "fpdt.conflictPolicy": {
+            "title": "Conflict Resolution",
+            "type": "string",
+            "enum": ["newest", "flashpoint", "local"],
+            "default": "newest",
+            "description": "What wins when both the Flashpoint copy and this machine changed the same file. \"newest\" compares modification times; ties go to the Flashpoint copy."
+          },
+          "fpdt.safetyBackups": {
+            "title": "Keep Conflict Copies",
+            "type": "boolean",
+            "default": true,
+            "description": "Copy the losing version of a conflict into the profile's .conflicts folder instead of discarding it."
+          },
+          "fpdt.cloudSync": {
+            "title": "Enable Cloud Sync",
+            "type": "boolean",
+            "default": false,
+            "description": "Back up the Flashpoint folder to Google Drive and restore it on other machines. Uses only the hidden app data folder, so other Drive files are never touched."
+          },
+          "fpdt.cloudSyncOnChange": {
+            "title": "Cloud Sync After Local Changes",
+            "type": "boolean",
+            "default": true,
+            "description": "After save data is backed up into the Flashpoint folder, also upload the change to Google Drive."
+          },
+          "fpdt.cloudIntervalMinutes": {
+            "title": "Cloud Sync Interval (minutes)",
+            "type": "string",
+            "enum": ["0", "5", "10", "15", "30", "60"],
+            "default": "15",
+            "description": "How often to check Google Drive for changes. Set to 0 to disable the periodic check; watcher, startup, pre-launch and manual syncs still run."
+          },
+          "fpdt.cloudClientId": {
+            "title": "Google Drive Client ID",
+            "type": "string",
+            "default": "",
+            "description": "OAuth client ID from a Google Cloud project with the Drive API enabled and a Desktop app OAuth client."
+          },
+          "fpdt.cloudClientSecret": {
+            "title": "Google Drive Client Secret",
+            "type": "string",
+            "default": "",
+            "description": "Client secret for the same Desktop app OAuth client. Cloud sync stays optional and off until enabled."
+          }
+        }
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}

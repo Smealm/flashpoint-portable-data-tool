@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Runtime data. The whole point of the extension is that this folder is portable,
+# so it must never be checked in to the extension's source repository.
+profiles/
+
+# Built release archives
+release/
