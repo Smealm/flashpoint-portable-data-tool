@@ -1,6 +1,6 @@
 # FPDT — Flashpoint Portable Data Tool
 
-A Flashpoint Launcher extension that makes Flashpoint's **non-portable data somewhat portable**.
+A [Flashpoint](https://flashpointarchive.org/) Launcher extension that makes Flashpoint's **non-portable data somewhat portable**.
 
 Flashpoint itself lives in one folder and can be moved easily. A lot of the data you actually care about does not.
 Games write saves to fixed Windows folders, and playlists and themes live in places that are easy to lose when you
