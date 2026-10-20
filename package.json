@@ -2,7 +2,7 @@
   "name": "fpdt",
   "displayName": "Flashpoint Portable Data Tool",
   "author": "FPDT",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "launcherVersion": "12.2.0",
   "description": "Stores and restores Flashpoint's non-portable save data inside the Flashpoint folder, with per-account profiles, a shared system partition, and optional scoped Google Drive cloud sync.",
   "repository": {
